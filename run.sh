@@ -59,14 +59,21 @@ fi
 
 echo ""
 echo "🚀 Starting AI Stock Predictor..."
-echo "   Dashboard will open at: http://localhost:8501"
+
+# Find an available port starting from 8501
+PORT=8501
+while lsof -iTCP:"$PORT" -sTCP:LISTEN -t &>/dev/null 2>&1; do
+    PORT=$((PORT + 1))
+done
+
+echo "   Dashboard will open at: http://localhost:$PORT"
 echo "   Press Ctrl+C to stop"
 echo ""
 
 # Launch Streamlit
 cd "$APP_DIR"
 exec streamlit run src/ui/app.py \
-    --server.port=8501 \
+    --server.port="$PORT" \
     --server.headless=false \
     --browser.gatherUsageStats=false \
     --theme.base=dark \

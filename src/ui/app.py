@@ -403,13 +403,19 @@ def build_prediction_chart(
     ))
 
     # Divider line between actual and projected
-    fig.add_vline(
-        x=recent.index[-1],
-        line_dash="dash",
-        line_color="#4a5568",
+    divider_x = recent.index[-1].isoformat()
+    fig.add_shape(
+        type="line",
+        x0=divider_x, x1=divider_x,
+        y0=0, y1=1,
+        yref="paper",
+        line=dict(color="#4a5568", width=1, dash="dash"),
         opacity=0.7,
-        annotation_text="Now",
-        annotation_position="top",
+    )
+    fig.add_annotation(
+        x=divider_x, y=1.05, yref="paper",
+        text="Now", showarrow=False,
+        font=dict(color="#a0aec0", size=12),
     )
 
     fig.update_layout(

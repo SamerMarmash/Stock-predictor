@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # LLM settings
     llm_provider: str = Field(default="anthropic", description="'openai' or 'anthropic'")
     llm_model: str = Field(
-        default="claude-sonnet-4-20250514",
+        default="claude-opus-4-6",
         description="Model ID for the chosen provider",
     )
     llm_temperature: float = 0.2

@@ -39,12 +39,18 @@ class LLMClient:
         user_prompt: str,
         temperature: float | None = None,
         max_tokens: int = 4096,
+        use_extended_thinking: bool = False,
+        thinking_budget: int = 10000,
     ) -> str:
         """Send a prompt to the configured LLM and return the text response."""
         temp = temperature if temperature is not None else self.settings.llm_temperature
 
         if self.settings.llm_provider == "anthropic":
-            return await self._anthropic_complete(system_prompt, user_prompt, temp, max_tokens)
+            return await self._anthropic_complete(
+                system_prompt, user_prompt, temp, max_tokens,
+                use_extended_thinking=use_extended_thinking,
+                thinking_budget=thinking_budget,
+            )
         return await self._openai_complete(system_prompt, user_prompt, temp, max_tokens)
 
     async def complete_json(
@@ -53,9 +59,15 @@ class LLMClient:
         user_prompt: str,
         temperature: float | None = None,
         max_tokens: int = 4096,
+        use_extended_thinking: bool = False,
+        thinking_budget: int = 10000,
     ) -> dict:
         """Send a prompt expecting a JSON response. Parses and returns as dict."""
-        raw = await self.complete(system_prompt, user_prompt, temperature, max_tokens)
+        raw = await self.complete(
+            system_prompt, user_prompt, temperature, max_tokens,
+            use_extended_thinking=use_extended_thinking,
+            thinking_budget=thinking_budget,
+        )
         # Strip markdown code fences if present
         text = raw.strip()
         if text.startswith("```"):
@@ -82,14 +94,39 @@ class LLMClient:
         return response.choices[0].message.content or ""
 
     async def _anthropic_complete(
-        self, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        use_extended_thinking: bool = False,
+        thinking_budget: int = 10000,
     ) -> str:
         client = self._get_anthropic()
-        response = await client.messages.create(
-            model=self.settings.llm_model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        return response.content[0].text
+
+        kwargs = {
+            "model": self.settings.llm_model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        }
+
+        if use_extended_thinking:
+            # Extended thinking requires temperature=1 and uses a budget
+            kwargs["temperature"] = 1
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": thinking_budget,
+            }
+        else:
+            kwargs["temperature"] = temperature
+
+        response = await client.messages.create(**kwargs)
+
+        # With extended thinking, response has thinking + text blocks
+        # Extract only the text block(s)
+        text_parts = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+        return "\n".join(text_parts) if text_parts else ""

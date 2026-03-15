@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -89,6 +90,11 @@ st.markdown("""
     .prediction-confidence {
         font-size: 1.3rem;
         opacity: 0.9;
+    }
+    .prediction-price-target {
+        font-size: 1.8rem;
+        font-weight: 700;
+        margin: 12px 0 4px 0;
     }
 
     /* Signal pills */
@@ -189,11 +195,22 @@ def confidence_color(pct: float) -> str:
     return "#ef4444"
 
 
+def timeframe_label(horizon: str) -> str:
+    """Return a human-readable label for the timeframe."""
+    labels = {
+        "intraday": "End of Day",
+        "daily": "End of Week",
+        "weekly": "End of Month",
+    }
+    return labels.get(horizon, horizon.title())
+
+
 # ---------------------------------------------------------------------------
 # Charts
 # ---------------------------------------------------------------------------
-def build_candlestick_chart(df: pd.DataFrame, ticker: str, signals=None) -> go.Figure:
+def build_candlestick_chart(df: pd.DataFrame, ticker: str, title_suffix: str = "") -> go.Figure:
     """Build an interactive candlestick chart with volume and optional signal annotations."""
+    title_text = f"{ticker} {'- ' + title_suffix if title_suffix else 'Price Chart'}"
     fig = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
@@ -255,7 +272,6 @@ def build_candlestick_chart(df: pd.DataFrame, ticker: str, signals=None) -> go.F
         )
 
     # RSI
-    import numpy as np
     delta = df["Close"].diff()
     gain = delta.where(delta > 0, 0.0).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
@@ -272,10 +288,132 @@ def build_candlestick_chart(df: pd.DataFrame, ticker: str, signals=None) -> go.F
         template="plotly_dark",
         paper_bgcolor="#0e1117",
         plot_bgcolor="#0e1117",
-        title=dict(text=f"{ticker} Price Chart", font=dict(size=18)),
-        height=650,
+        title=dict(text=title_text, font=dict(size=16)),
+        height=550,
         margin=dict(l=50, r=20, t=50, b=30),
         xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        showlegend=True,
+    )
+    fig.update_xaxes(gridcolor="#1e2433")
+    fig.update_yaxes(gridcolor="#1e2433")
+
+    return fig
+
+
+def build_prediction_chart(
+    history: pd.DataFrame,
+    ticker: str,
+    current_price: float,
+    predicted_price: float,
+    time_horizon: str,
+    direction: Direction,
+) -> go.Figure:
+    """Build a projected price chart showing the prediction path."""
+    # Determine how many future points to show based on timeframe
+    horizon_days = {"intraday": 1, "daily": 5, "weekly": 22}
+    n_future = horizon_days.get(time_horizon, 5)
+
+    # Get last N days of actual data for context
+    recent = history.tail(30) if len(history) > 30 else history
+
+    # Generate projected price path
+    last_date = recent.index[-1]
+    future_dates = pd.bdate_range(start=last_date, periods=n_future + 1)[1:]
+
+    # Create a smooth curve from current to predicted price
+    steps = len(future_dates)
+    if steps > 0:
+        # Add some realistic variance to the projected path
+        t = np.linspace(0, 1, steps)
+        # Use a slight S-curve for more natural look
+        smooth = 3 * t**2 - 2 * t**3
+        projected_prices = current_price + (predicted_price - current_price) * smooth
+        # Add small random noise for realism
+        noise = np.random.normal(0, abs(predicted_price - current_price) * 0.03, steps)
+        noise[-1] = 0  # Ensure final point hits target exactly
+        projected_prices = projected_prices + noise
+        projected_prices[-1] = predicted_price
+    else:
+        future_dates = [last_date + pd.Timedelta(days=1)]
+        projected_prices = [predicted_price]
+
+    color = direction_color(direction)
+
+    fig = go.Figure()
+
+    # Recent actual price line
+    fig.add_trace(go.Scatter(
+        x=recent.index,
+        y=recent["Close"],
+        name="Recent Price",
+        line=dict(color="#a0aec0", width=2),
+        mode="lines",
+    ))
+
+    # Projection line
+    # Connect from last actual price to projected
+    all_proj_dates = [recent.index[-1]] + list(future_dates)
+    all_proj_prices = [current_price] + list(projected_prices)
+
+    fig.add_trace(go.Scatter(
+        x=all_proj_dates,
+        y=all_proj_prices,
+        name="Predicted Path",
+        line=dict(color=color, width=3, dash="dot"),
+        mode="lines",
+    ))
+
+    # Confidence band (wider as we go further)
+    spread = abs(predicted_price - current_price)
+    upper_band = [current_price] + [p + spread * 0.3 * (i + 1) / steps for i, p in enumerate(projected_prices)]
+    lower_band = [current_price] + [p - spread * 0.3 * (i + 1) / steps for i, p in enumerate(projected_prices)]
+
+    fig.add_trace(go.Scatter(
+        x=all_proj_dates,
+        y=upper_band,
+        name="Upper Range",
+        line=dict(width=0),
+        showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=all_proj_dates,
+        y=lower_band,
+        name="Confidence Range",
+        line=dict(width=0),
+        fill="tonexty",
+        fillcolor=f"rgba({','.join(str(int(color.lstrip('#')[i:i+2], 16)) for i in (0, 2, 4))},0.15)",
+    ))
+
+    # Target price marker
+    fig.add_trace(go.Scatter(
+        x=[future_dates[-1]],
+        y=[predicted_price],
+        name=f"Target: ${predicted_price:.2f}",
+        mode="markers+text",
+        marker=dict(color=color, size=14, symbol="star"),
+        text=[f"${predicted_price:.2f}"],
+        textposition="top center",
+        textfont=dict(color=color, size=14, family="Arial Black"),
+    ))
+
+    # Divider line between actual and projected
+    fig.add_vline(
+        x=recent.index[-1],
+        line_dash="dash",
+        line_color="#4a5568",
+        opacity=0.7,
+        annotation_text="Now",
+        annotation_position="top",
+    )
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        title=dict(text=f"{ticker} - Predicted ({timeframe_label(time_horizon)})", font=dict(size=16)),
+        height=550,
+        margin=dict(l=50, r=20, t=50, b=30),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         showlegend=True,
     )
@@ -381,7 +519,7 @@ def build_strategy_radar(strategies) -> go.Figure:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Sidebar - Simplified: just ticker and timeframe
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## 📈 AI Stock Predictor")
@@ -394,35 +532,13 @@ with st.sidebar:
         help="Enter a stock ticker symbol (e.g., AAPL, TSLA, NVDA)",
     ).upper().strip()
 
-    st.markdown("### Analysis Settings")
+    st.markdown("### Prediction Timeframe")
 
     time_horizon = st.selectbox(
-        "Time Horizon",
+        "How far out?",
         ["Intraday", "Daily", "Weekly"],
         index=1,
-    )
-
-    history_period = st.selectbox(
-        "Chart History",
-        ["1mo", "3mo", "6mo", "1y", "2y"],
-        index=1,
-    )
-
-    st.markdown("### Intelligence Sources")
-
-    use_news = st.checkbox("News & RSS Feeds", value=True)
-    use_social = st.checkbox("Social Media (X, Reddit)", value=True)
-    use_youtube = st.checkbox("YouTube Analysis", value=True)
-    use_web = st.checkbox("Web / Analyst Sites", value=True)
-
-    st.markdown("### Notification Settings")
-    confidence_threshold = st.slider(
-        "Min Confidence for Alerts",
-        min_value=0,
-        max_value=100,
-        value=60,
-        step=5,
-        format="%d%%",
+        help="Intraday = end of today, Daily = end of week, Weekly = end of month",
     )
 
     st.markdown("---")
@@ -442,6 +558,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.caption("All intelligence sources are searched automatically.")
     st.caption("Predictions are for educational purposes only. Not financial advice.")
 
 
@@ -461,7 +578,7 @@ market = MarketDataProvider()
 with st.spinner(f"Loading {ticker} market data..."):
     try:
         current_data = run_async(market.get_current_price(ticker))
-        history = run_async(market.get_historical_data(ticker, period=history_period))
+        history = run_async(market.get_historical_data(ticker, period="3mo"))
     except Exception as e:
         st.error(f"Failed to fetch data for {ticker}: {e}")
         st.stop()
@@ -515,9 +632,9 @@ with m5:
         mcap_str = f"${mcap:,.0f}"
     st.markdown(f'<div class="metric-card"><div class="metric-label">Market Cap</div><div class="metric-value">{mcap_str}</div></div>', unsafe_allow_html=True)
 
-# Chart
+# Chart - shown before analysis
 if history is not None and not history.empty:
-    chart = build_candlestick_chart(history, ticker)
+    chart = build_candlestick_chart(history, ticker, title_suffix="Current")
     st.plotly_chart(chart, use_container_width=True)
 
 # ---------------------------------------------------------------------------
@@ -525,7 +642,7 @@ if history is not None and not history.empty:
 # ---------------------------------------------------------------------------
 if analyze_btn:
     st.markdown("---")
-    st.markdown("## 🔬 Analysis Results")
+    st.markdown("## 🔬 Deep Analysis Results")
 
     # Technical Analysis
     tech_analyzer = TechnicalAnalyzer()
@@ -537,42 +654,35 @@ if analyze_btn:
             tech_signals, current_data, history
         ) if tech_signals else []
 
-    # Intelligence Gathering
+    # Intelligence Gathering - ALWAYS use ALL sources
     intel_items = []
-    if any([use_news, use_social, use_youtube, use_web]):
-        with st.spinner("Gathering intelligence across the internet..."):
-            try:
-                from src.intelligence.aggregator import IntelligenceAggregator
-                aggregator = IntelligenceAggregator()
+    with st.spinner("Searching all intelligence sources (news, social, YouTube, web, insider data)..."):
+        try:
+            from src.intelligence.aggregator import IntelligenceAggregator
+            aggregator = IntelligenceAggregator()
 
-                # Selectively run collectors
-                import asyncio as aio
+            async def gather_intel():
+                tasks = [
+                    aggregator.news.collect(ticker, company),
+                    aggregator.social.collect(ticker, company),
+                    aggregator.youtube.collect(ticker, company),
+                    aggregator.web.collect(ticker, company),
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                items = []
+                for r in results:
+                    if isinstance(r, list):
+                        items.extend(r)
+                return items
 
-                async def gather_intel():
-                    tasks = []
-                    if use_news:
-                        tasks.append(aggregator.news.collect(ticker, company))
-                    if use_social:
-                        tasks.append(aggregator.social.collect(ticker, company))
-                    if use_youtube:
-                        tasks.append(aggregator.youtube.collect(ticker, company))
-                    if use_web:
-                        tasks.append(aggregator.web.collect(ticker, company))
-                    results = await aio.gather(*tasks, return_exceptions=True)
-                    items = []
-                    for r in results:
-                        if isinstance(r, list):
-                            items.extend(r)
-                    return items
-
-                intel_items = run_async(gather_intel())
-            except Exception as e:
-                st.warning(f"Intelligence gathering partial failure: {e}")
+            intel_items = run_async(gather_intel())
+        except Exception as e:
+            st.warning(f"Intelligence gathering partial failure: {e}")
 
     # Fact checking
     expert_validations = []
     if intel_items and has_llm:
-        with st.spinner("Fact-checking against expert opinions..."):
+        with st.spinner("Fact-checking against expert opinions & insider activity..."):
             try:
                 from src.prediction.fact_checker import FactChecker
                 checker = FactChecker()
@@ -582,14 +692,14 @@ if analyze_btn:
             except Exception as e:
                 st.warning(f"Fact-checking error: {e}")
 
-    # AI Prediction
+    # AI Prediction with deep thinking
     prediction = None
     if has_llm:
-        with st.spinner("AI is synthesizing all data to generate prediction..."):
+        with st.spinner("AI is deeply analyzing all data with extended thinking (this may take a moment)..."):
             try:
                 from src.prediction.engine import PredictionEngine
                 engine = PredictionEngine()
-                prediction = run_async(engine.predict(ticker))
+                prediction = run_async(engine.predict(ticker, time_horizon=time_horizon.lower()))
             except Exception as e:
                 st.warning(f"AI prediction error: {e}")
 
@@ -641,22 +751,47 @@ if analyze_btn:
         d = prediction.direction
         banner_class = f"{d.value}-banner"
         emoji = direction_emoji(d)
+        horizon_text = timeframe_label(prediction.time_horizon.value)
 
+        # Main prediction banner with predicted price prominently displayed
         st.markdown(
             f'<div class="prediction-banner {banner_class}">'
             f'<div class="prediction-direction" style="color:{direction_color(d)}">'
             f'{emoji} {d.value.upper()}</div>'
-            f'<div class="prediction-confidence">Confidence: {prediction.confidence_pct:.0f}%</div>'
-            f'<div style="margin-top:12px;font-size:1.1rem">'
-            f'${prediction.current_price:.2f} → ${prediction.predicted_price:.2f} '
+            f'<div class="prediction-price-target" style="color:white">'
+            f'Predicted Price ({horizon_text}): '
+            f'<span style="color:{direction_color(d)}">${prediction.predicted_price:.2f}</span>'
+            f'</div>'
+            f'<div style="font-size:1.1rem;color:#a0aec0;margin:4px 0">'
+            f'Current: ${prediction.current_price:.2f} → Target: ${prediction.predicted_price:.2f} '
             f'({prediction.predicted_price_change_pct:+.1f}%)</div>'
-            f'<div style="margin-top:6px;color:#a0aec0;font-size:0.9rem">'
-            f'Time Horizon: {prediction.time_horizon.value.title()} | '
-            f'Sources: {prediction.source_count} | '
+            f'<div class="prediction-confidence" style="margin-top:8px">'
+            f'AI Confidence: <strong style="color:{confidence_color(prediction.confidence_pct)}">'
+            f'{prediction.confidence_pct:.0f}%</strong></div>'
+            f'<div style="margin-top:6px;color:#718096;font-size:0.85rem">'
+            f'Sources Analyzed: {prediction.source_count} | '
             f'Model: {prediction.model_used}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
+
+        # Side-by-side charts: Current vs Predicted
+        st.markdown("### Current Price vs Prediction")
+        chart_left, chart_right = st.columns(2)
+        with chart_left:
+            if history is not None and not history.empty:
+                current_chart = build_candlestick_chart(history, ticker, title_suffix="Current")
+                st.plotly_chart(current_chart, use_container_width=True)
+        with chart_right:
+            if history is not None and not history.empty:
+                pred_chart = build_prediction_chart(
+                    history, ticker,
+                    prediction.current_price,
+                    prediction.predicted_price,
+                    prediction.time_horizon.value,
+                    prediction.direction,
+                )
+                st.plotly_chart(pred_chart, use_container_width=True)
 
         # Confidence gauge + strategy radar
         gcol, rcol = st.columns(2)
@@ -668,7 +803,7 @@ if analyze_btn:
 
         # Tabs for detailed analysis
         tab_strat, tab_tech, tab_intel, tab_experts, tab_cases = st.tabs([
-            "📊 Strategies", "📉 Technical Signals", "🌐 Intelligence", "👤 Expert Validation", "📋 Bull/Bear Case",
+            "📊 Strategies", "📉 Technical Signals", "🌐 Intelligence", "👤 Expert Validation", "📋 Upside / Downside",
         ])
 
         with tab_strat:
@@ -724,7 +859,7 @@ if analyze_btn:
                         if item.url:
                             st.caption(item.url)
             else:
-                st.info("No intelligence gathered. Enable sources in the sidebar.")
+                st.info("No intelligence gathered.")
 
         with tab_experts:
             if prediction.expert_validations:
@@ -753,7 +888,7 @@ if analyze_btn:
             with bc:
                 st.markdown(
                     f'<div class="strategy-card" style="border-left-color:#22c55e">'
-                    f'<strong style="color:#22c55e">🐂 Bull Case</strong>'
+                    f'<strong style="color:#22c55e">📈 Upside Potential</strong>'
                     f'<div style="margin-top:8px;color:#d1d5db">{prediction.bull_case}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -761,7 +896,7 @@ if analyze_btn:
             with brc:
                 st.markdown(
                     f'<div class="strategy-card" style="border-left-color:#ef4444">'
-                    f'<strong style="color:#ef4444">🐻 Bear Case</strong>'
+                    f'<strong style="color:#ef4444">📉 Downside Risk</strong>'
                     f'<div style="margin-top:8px;color:#d1d5db">{prediction.bear_case}</div>'
                     f'</div>',
                     unsafe_allow_html=True,

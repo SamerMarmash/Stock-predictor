@@ -33,28 +33,46 @@ from src.strategies.trading_strategies import TradingStrategyEngine
 logger = structlog.get_logger()
 
 SYSTEM_PROMPT = """You are an elite quantitative analyst and professional day trader with decades of
-experience. You have deep knowledge of:
+experience at top-tier hedge funds. You have deep knowledge of:
 
 - Technical analysis: candlestick patterns, chart patterns, indicators (RSI, MACD, Bollinger Bands,
   Fibonacci, Ichimoku, volume profile, order flow)
-- Fundamental analysis: earnings, revenue growth, PE ratios, sector rotation
+- Fundamental analysis: earnings, revenue growth, PE ratios, sector rotation, balance sheet analysis
 - Sentiment analysis: social media sentiment, news impact, fear/greed indicators
-- Market microstructure: bid-ask spreads, dark pool activity, options flow
+- Market microstructure: bid-ask spreads, dark pool activity, options flow, institutional positioning
 - Trading strategies: trend following, mean reversion, breakout, scalping, pairs trading,
   momentum, gap trading, VWAP strategies
 - Risk management: position sizing, stop-loss placement, risk-reward ratios
 - Behavioral finance: market psychology, institutional vs retail flow
 - Macroeconomics: Fed policy, interest rates, inflation, GDP impact on equities
+- Insider activity: SEC filings, Form 4 insider transactions, institutional 13F filings,
+  unusual insider buying/selling patterns, executive compensation changes
 
-Your job is to synthesize ALL provided data (technical signals, news intelligence, social sentiment,
-expert opinions, and trading strategy results) into a single, well-reasoned stock prediction.
+Your job is to DEEPLY analyze ALL provided data. Take your time to think through every angle:
+1. Cross-reference technical signals with fundamental data
+2. Look for confirmation or divergence across multiple sources
+3. Weigh insider trading activity and institutional positioning heavily
+4. Consider contrarian viewpoints and what could go wrong
+5. Factor in the current market regime (bull, bear, or range-bound)
+6. Analyze sector-specific trends and competitive dynamics
 
-You must be honest about uncertainty and never overstate confidence. Consider contrarian viewpoints.
-Factor in the current market regime (bull, bear, or range-bound).
+You must be honest about uncertainty and never overstate confidence.
+
+CRITICAL: You MUST find and reference at least one piece of evidence for EACH of these categories
+in your analysis:
+- Trading strategy signals (from the strategy results)
+- Technical indicator signals (from the technical analysis)
+- Intelligence/news data (from the intelligence report)
+- Expert or analyst opinions (from the expert validations)
+- Upside potential (best case scenario)
+- Downside risks (worst case scenario)
+
+If any category has no data, note that explicitly and factor the gap into your confidence level.
 
 IMPORTANT: You must respond with valid JSON only. No explanatory text outside the JSON."""
 
 PREDICTION_PROMPT_TEMPLATE = """Analyze the following data for {ticker} ({company_name}) and provide your prediction.
+Time horizon for this prediction: {time_horizon}
 
 ## Current Market Data
 {market_data}
@@ -74,17 +92,25 @@ PREDICTION_PROMPT_TEMPLATE = """Analyze the following data for {ticker} ({compan
 ## Options Flow
 {options_data}
 
-Based on ALL of the above, provide your prediction as JSON with this exact structure:
+## Insider Activity & Institutional Data
+{insider_data}
+
+Think deeply about ALL of the above data. Cross-reference signals across categories.
+Look for hidden patterns, confirmation biases, and contrarian indicators.
+Pay special attention to insider trading patterns and institutional movements.
+
+Provide your prediction as JSON with this exact structure:
 {{
     "direction": "bullish" or "bearish" or "neutral",
     "predicted_price_change_pct": <float, e.g. 2.5 for +2.5%>,
     "confidence_pct": <float 0-100, your honest confidence in this prediction>,
-    "time_horizon": "intraday" or "daily" or "weekly",
-    "key_drivers": ["driver1", "driver2", "driver3"],
+    "time_horizon": "{time_horizon}",
+    "key_drivers": ["driver1", "driver2", "driver3", "driver4", "driver5"],
     "intelligence_summary": "<2-3 sentence summary of what the intelligence tells us>",
-    "bull_case": "<strongest bull argument in 1-2 sentences>",
-    "bear_case": "<strongest bear argument in 1-2 sentences>",
-    "predicted_price": <float, target price>
+    "bull_case": "<strongest upside argument in 2-3 sentences, with specific data points>",
+    "bear_case": "<strongest downside argument in 2-3 sentences, with specific data points>",
+    "predicted_price": <float, specific target price at end of {time_horizon} timeframe>,
+    "insider_sentiment": "<1 sentence summary of insider/institutional activity>"
 }}
 
 Rules for confidence_pct:
@@ -94,7 +120,8 @@ Rules for confidence_pct:
 - 20-39%: Highly uncertain, conflicting signals. Acknowledge the uncertainty.
 - 0-19%: Essentially a coin flip. No clear edge.
 
-Be calibrated and honest. Most predictions should be in the 35-65% range."""
+Be calibrated and honest. Most predictions should be in the 35-65% range.
+The predicted_price should be your SPECIFIC price target at the END of the {time_horizon} timeframe."""
 
 
 class PredictionEngine:
@@ -109,11 +136,11 @@ class PredictionEngine:
         self.llm = LLMClient()
         self.settings = get_settings()
 
-    async def predict(self, ticker: str) -> StockPrediction:
+    async def predict(self, ticker: str, time_horizon: str = "daily") -> StockPrediction:
         """Generate a full prediction for a stock ticker."""
         start = time.time()
         ticker = ticker.upper()
-        logger.info("prediction_started", ticker=ticker)
+        logger.info("prediction_started", ticker=ticker, time_horizon=time_horizon)
 
         # Phase 1: Gather all data in parallel
         snapshot = await self.market.get_full_snapshot(ticker)
@@ -129,7 +156,7 @@ class PredictionEngine:
             tech_signals, current_data, history, snapshot.get("options")
         )
 
-        # Gather intelligence from all sources
+        # Gather intelligence from ALL sources (no optional toggling)
         intel_items = await self.intelligence.gather_all(ticker, company_name)
 
         # Fact-check against expert opinions
@@ -137,7 +164,7 @@ class PredictionEngine:
             ticker, company_name, tech_signals, intel_items
         )
 
-        # Phase 2: Send everything to the AI for synthesis
+        # Phase 2: Send everything to the AI for deep synthesis with extended thinking
         prediction = await self._synthesize(
             ticker=ticker,
             company_name=company_name,
@@ -147,6 +174,7 @@ class PredictionEngine:
             intel_items=intel_items,
             expert_validations=expert_validations,
             options_data=snapshot.get("options", {}),
+            time_horizon=time_horizon,
         )
 
         prediction.generation_time_seconds = round(time.time() - start, 2)
@@ -174,8 +202,9 @@ class PredictionEngine:
         intel_items: list[IntelligenceItem],
         expert_validations: list[ExpertValidation],
         options_data: dict,
+        time_horizon: str = "daily",
     ) -> StockPrediction:
-        """Use the LLM to synthesize all data into a prediction."""
+        """Use the LLM to synthesize all data into a prediction with extended thinking."""
 
         # Format technical signals
         tech_text = "\n".join(
@@ -189,10 +218,11 @@ class PredictionEngine:
             for s in strategy_signals
         ) or "No strategy signals available."
 
-        # Summarize intelligence (take top 30 items by credibility)
-        sorted_intel = sorted(intel_items, key=lambda x: x.credibility_score, reverse=True)[:30]
+        # Summarize intelligence (take top 50 items by credibility for deeper analysis)
+        sorted_intel = sorted(intel_items, key=lambda x: x.credibility_score, reverse=True)[:50]
         intel_text = "\n".join(
-            f"- [{i.source_type.value}] {i.source_name}: {i.title} (credibility: {i.credibility_score:.0%})"
+            f"- [{i.source_type.value}] {i.source_name}: {i.title} "
+            f"(credibility: {i.credibility_score:.0%}, sentiment: {i.sentiment_score:+.2f})"
             for i in sorted_intel
         ) or "No intelligence gathered."
 
@@ -212,6 +242,19 @@ class PredictionEngine:
         else:
             options_text = "Options data not available."
 
+        # Extract insider activity from intelligence items
+        insider_items = [
+            i for i in intel_items
+            if i.source_type.value in ("sec_filing", "web_scrape")
+            or "insider" in i.title.lower()
+            or "13f" in i.title.lower()
+            or "institutional" in i.title.lower()
+        ]
+        insider_text = "\n".join(
+            f"- {i.source_name}: {i.title} - {i.content[:200]}"
+            for i in insider_items[:20]
+        ) or "No insider activity data found. Factor this data gap into confidence."
+
         # Format current market data
         market_text = json.dumps(
             {k: v for k, v in current_data.items() if not isinstance(v, (pd.DataFrame,))},
@@ -229,16 +272,28 @@ class PredictionEngine:
             intelligence_summary=intel_text,
             expert_validations=expert_text,
             options_data=options_text,
+            insider_data=insider_text,
+            time_horizon=time_horizon,
         )
 
         try:
-            result = await self.llm.complete_json(SYSTEM_PROMPT, prompt, max_tokens=2048)
-        except Exception as e:
-            logger.error("llm_synthesis_failed", error=str(e))
-            # Fall back to strategy-based prediction
-            return self._fallback_prediction(
-                ticker, company_name, current_data, strategy_signals, intel_items
+            # Use extended thinking for deeper analysis with Opus
+            result = await self.llm.complete_json(
+                SYSTEM_PROMPT, prompt,
+                max_tokens=16000,
+                use_extended_thinking=True,
+                thinking_budget=10000,
             )
+        except Exception as e:
+            logger.warning("extended_thinking_failed, retrying without", error=str(e))
+            try:
+                # Fallback: try without extended thinking
+                result = await self.llm.complete_json(SYSTEM_PROMPT, prompt, max_tokens=4096)
+            except Exception as e2:
+                logger.error("llm_synthesis_failed", error=str(e2))
+                return self._fallback_prediction(
+                    ticker, company_name, current_data, strategy_signals, intel_items, time_horizon
+                )
 
         current_price = current_data.get("current_price", 0)
         predicted_price = result.get("predicted_price", current_price)
@@ -255,7 +310,7 @@ class PredictionEngine:
             confidence_pct=result.get("confidence_pct", 40),
             current_price=current_price,
             predicted_price=round(predicted_price, 2),
-            time_horizon=TimeHorizon(result.get("time_horizon", "daily")),
+            time_horizon=TimeHorizon(result.get("time_horizon", time_horizon)),
             key_drivers=result.get("key_drivers", []),
             intelligence_summary=result.get("intelligence_summary", ""),
             strategy_signals=strategy_signals,
@@ -272,6 +327,7 @@ class PredictionEngine:
         current_data: dict,
         strategy_signals: list[StrategySignal],
         intel_items: list[IntelligenceItem],
+        time_horizon: str = "daily",
     ) -> StockPrediction:
         """Produce a prediction from strategy signals when the LLM is unavailable."""
         bullish = sum(1 for s in strategy_signals if s.direction == Direction.BULLISH)
@@ -300,7 +356,7 @@ class PredictionEngine:
             confidence_pct=round(avg_conf * 100, 1),
             current_price=current_price,
             predicted_price=round(predicted, 2),
-            time_horizon=TimeHorizon.DAILY,
+            time_horizon=TimeHorizon(time_horizon),
             key_drivers=["Technical strategy consensus (LLM unavailable)"],
             intelligence_summary=f"Based on {len(strategy_signals)} trading strategies. {bullish} bullish, {bearish} bearish.",
             strategy_signals=strategy_signals,

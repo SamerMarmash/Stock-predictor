@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock-predictor"
+version = "0.1.0"
+description = "AI-powered stock prediction app with multi-source intelligence gathering and hourly notifications"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.1.0",
+    "apscheduler>=3.10.4",
+    "yfinance>=0.2.36",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "openai>=1.12.0",
+    "anthropic>=0.18.0",
+    "beautifulsoup4>=4.12.0",
+    "feedparser>=6.0.0",
+    "aiohttp>=3.9.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "alembic>=1.13.0",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.0",
+    "structlog>=24.1.0",
+    "apprise>=1.7.0",
+    "jinja2>=3.1.0",
+    "yt-dlp>=2024.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+stock-predictor = "src.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

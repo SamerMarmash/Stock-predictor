@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from datetime import datetime
+from pathlib import Path
+
+# Ensure the project root is on sys.path so `src.*` imports resolve when
+# Streamlit is launched via `streamlit run src/ui/app.py`.
+_project_root = str(Path(__file__).parents[2])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import pandas as pd
 import plotly.graph_objects as go

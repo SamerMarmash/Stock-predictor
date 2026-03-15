@@ -43,26 +43,45 @@ SMA (20/50/200), EMA (9/21), VWAP, RSI, MACD, Stochastic, Williams %R, Bollinger
 - Configurable confidence threshold per subscription
 - Rich formatted messages with full prediction details
 
-## Quick Start
+## Quick Start (Mac)
 
-### 1. Install
+### Option 1: One-Command Launch (Recommended)
 
 ```bash
-pip install -e ".[dev]"
+git clone <repo-url> && cd Stock-predictor
+./run.sh
 ```
 
-### 2. Configure
+That's it. The script will:
+1. Create a Python virtual environment
+2. Install all dependencies
+3. Create a `.env` file from the template
+4. Open the interactive dashboard at **http://localhost:8501**
+
+> **No API keys needed** for basic technical analysis. Add an Anthropic or OpenAI key in `.env` for full AI predictions.
+
+### Option 2: Manual Install
 
 ```bash
+# Create and activate a virtual environment
+python3 -m venv .venv && source .venv/bin/activate
+
+# Install the package
+pip install -e .
+
+# Copy config template
 cp .env.example .env
-# Edit .env with your API keys
+
+# Launch the dashboard
+streamlit run src/ui/app.py
 ```
 
-**Minimum requirement**: One LLM API key (Anthropic or OpenAI). All other keys are optional and enable additional intelligence sources.
-
-### 3. Run a Prediction
+### Option 3: CLI Only
 
 ```bash
+pip install -e .
+cp .env.example .env
+
 # One-off prediction
 stock-predictor predict AAPL
 
@@ -73,20 +92,15 @@ stock-predictor predict AAPL TSLA NVDA MSFT
 stock-predictor predict AAPL --notify
 ```
 
-### 4. Subscribe to Hourly Predictions
+### Subscribe to Hourly Predictions
 
 ```bash
-# Subscribe
 stock-predictor subscribe AAPL TSLA --threshold 60
-
-# Start the scheduler
-stock-predictor start
-
-# Start with REST API
-stock-predictor start --api --port 8000
+stock-predictor start          # Scheduler only
+stock-predictor start --api    # Scheduler + REST API
 ```
 
-### 5. View History
+### View History
 
 ```bash
 stock-predictor history AAPL --limit 50
@@ -121,6 +135,8 @@ curl http://localhost:8000/predict/AAPL | python -m json.tool
 
 ```
 src/
+├── ui/
+│   └── app.py             # Streamlit interactive dashboard
 ├── core/
 │   ├── config.py          # Environment-based configuration
 │   ├── models.py          # Domain models (Pydantic)
